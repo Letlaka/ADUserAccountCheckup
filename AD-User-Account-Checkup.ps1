@@ -13,7 +13,7 @@ if (-not $isDC) {
     do {
         $credential = Get-Credential -Message "Enter credentials"
         try {
-            # Test the provided credentials by attempting to get information about a specific user account on the first domain controller in the list
+            # Test the provided credentials by attempting to get information from the first domain controller in the list
             Get-ADUser -Filter * -Server $DCs[0] -Credential $credential | Out-Null
             $invalidCredentials = $false
         } catch {
