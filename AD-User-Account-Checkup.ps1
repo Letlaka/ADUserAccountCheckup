@@ -5,13 +5,16 @@ Import-Module ActiveDirectory
 $computer = Get-WmiObject -Class Win32_ComputerSystem
 $isDC = $computer.DomainRole -eq 4 -or $computer.DomainRole -eq 5
 
+# Read the domain controllers to check from a file named "servers.txt" stored in the same directory as the script
+$DCs = Get-Content -Path (Join-Path -Path $PSScriptRoot -ChildPath "servers.txt")
+
 # Prompt for credentials if the machine is not a domain controller
 if (-not $isDC) {
     do {
         $credential = Get-Credential -Message "Enter credentials"
         try {
-            # Test the provided credentials by attempting to get a list of domain controllers
-            Get-ADDomainController -Filter * -Credential $credential | Out-Null
+            # Test the provided credentials by attempting to get information about a specific user account on the first domain controller in the list
+            Get-ADUser -Filter * -Server $DCs[0] -Credential $credential | Out-Null
             $invalidCredentials = $false
         } catch {
             Write-Warning "Invalid credentials, please try again"
@@ -19,9 +22,6 @@ if (-not $isDC) {
         }
     } while ($invalidCredentials)
 }
-
-# Read the domain controllers to check from a file named "servers.txt" stored in the same directory as the script
-$DCs = Get-Content -Path (Join-Path -Path $PSScriptRoot -ChildPath "servers.txt")
 
 do {
     # Prompt the user for the username to check
