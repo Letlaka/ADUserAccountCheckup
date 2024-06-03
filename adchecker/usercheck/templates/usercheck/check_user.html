@@ -1,0 +1,12 @@
+{% extends "usercheck/base.html" %}{% block content %}
+    <h1>Check User Information</h1>
+    <form method="post">
+        {% csrf_token %}
+        {{ form.as_p }}
+        <button type="submit">Check</button>
+    </form>
+    {% if result %}
+        <h2>Result:</h2>
+        <pre>{{ result }}</pre>
+    {% endif %}
+{% endblock %}
