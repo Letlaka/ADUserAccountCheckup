@@ -1,123 +1,150 @@
 ﻿# Import the ActiveDirectory module
 Import-Module ActiveDirectory
 
-# Check if the machine running the script is a domain controller
-$computer = Get-WmiObject -Class Win32_ComputerSystem
-$isDC = $computer.DomainRole -eq 4 -or $computer.DomainRole -eq 5
+# Function to check if the machine running the script is a domain controller
+function Is-DomainController {
+    $computer = Get-WmiObject -Class Win32_ComputerSystem
+    return $computer.DomainRole -eq 4 -or $computer.DomainRole -eq 5
+}
 
-# Read the domain controllers to check from a file named "servers.txt" stored in the same directory as the script
-$DCs = Get-Content -Path (Join-Path -Path $PSScriptRoot -ChildPath "servers.txt")
+# Function to get domain controller list
+function Get-DomainControllers {
+    $DCListPath = Join-Path -Path $PSScriptRoot -ChildPath "servers.txt"
+    if (Test-Path $DCListPath) {
+        return Get-Content $DCListPath
+    } else {
+        Write-Warning "Domain controller list file not found: $DCListPath"
+        return Get-ADDomainController -Filter {Enabled -eq $true} | Select-Object -ExpandProperty HostName
+    }
+}
 
-# Prompt for credentials if the machine is not a domain controller
-if (-not $isDC) {
+# Function to get credentials if needed
+function Get-ADCredentials {
+    param (
+        [string]$server
+    )
     do {
         $credential = Get-Credential -Message "Enter credentials"
         try {
-            # Test the provided credentials by attempting to get information from the first domain controller in the list
-            Get-ADUser -Filter * -Server $DCs[0] -Credential $credential | Out-Null
-            $invalidCredentials = $false
+            Get-ADUser -Filter * -Server $server -Credential $credential -ErrorAction Stop | Out-Null
+            return $credential
         } catch {
             Write-Warning "Invalid credentials, please try again"
-            $invalidCredentials = $true
         }
-    } while ($invalidCredentials)
+    } while ($true)
+}
+
+# Function to get user information
+function Get-UserInfo {
+    param (
+        [string]$username,
+        [string]$server,
+        [pscredential]$credential = $null
+    )
+    $properties = @('AccountExpirationDate', 'PasswordExpired', 'PasswordLastSet', 'LockedOut', 'PasswordNeverExpires', 'LastLogonDate', 'Enabled')
+    if ($credential) {
+        return Get-ADUser -Identity $username -Server $server -Credential $credential -Properties $properties -ErrorAction SilentlyContinue
+    } else {
+        return Get-ADUser -Identity $username -Server $server -Properties $properties -ErrorAction SilentlyContinue
+    }
+}
+
+# Function to display user information
+function Display-UserInfo {
+    param (
+        [array]$DCInfo,
+        [string]$username
+    )
+    Write-Output "`nSummary of information checked for user: $username"
+    $DCInfo | Format-Table -Property DomainController, Enabled, AccountExpirationDate, PasswordExpired, PasswordAgeDays, PasswordNeverExpires, LockedOut, LastLogonDate
+    Write-Output "Script run by: $($env:USERNAME) on $(Get-Date)"
+}
+
+# Function to handle password reset
+function Reset-UserPassword {
+    param (
+        [string]$username,
+        [array]$DCs,
+        [string]$newPassword
+    )
+    $resetSuccessful = $false
+    foreach ($DC in $DCs) {
+        try {
+            Set-ADAccountPassword -Identity $username -Server $DC -NewPassword (ConvertTo-SecureString $newPassword -AsPlainText -Force)
+            Set-ADUser -Identity $username -Server $DC -ChangePasswordAtLogon $true
+            Write-Output "Password reset successfully on domain controller: $DC"
+            $resetSuccessful = $true
+            break  # Stop after successful reset on any DC
+        } catch {
+            Write-Warning "Error resetting password on domain controller: $DC"
+        }
+    }
+
+    if (!$resetSuccessful) {
+        Write-Warning "Failed to reset the password on all domain controllers"
+    }
+}
+
+# Main script
+$DCs = Get-DomainControllers
+
+$isDC = Is-DomainController
+
+if (-not $isDC) {
+    $credential = Get-ADCredentials -server ($DCs[0])
 }
 
 do {
-    # Prompt the user for the username to check
     $username = Read-Host -Prompt 'Enter the username to check'
+    $userInfo = Get-UserInfo -username $username -server ($DCs[0]) -credential $credential
 
-    # Create an empty array to store information about each domain controller checked
-    $DCInfo = @()
+    if ($userInfo) {
+        $DCInfo = @()
+        $passwordExpired = $false
+        $lockedOutDCs = @()
+        $needsPasswordReset = $false
 
-    # Loop through each domain controller
-    foreach ($DC in $DCs) {
-        # Display the current domain controller name
-        Write-Output "`nChecking user on domain controller: $DC"
-
-        # Get the user information from the current domain controller
-        if ($isDC) {
-            $user = Get-ADUser -Identity $username -Server $DC -Properties AccountExpirationDate, PasswordExpired, PasswordLastSet, LockedOut, PasswordNeverExpires, LastLogonDate
-        } else {
-            $user = Get-ADUser -Identity $username -Server $DC -Credential $credential -Properties AccountExpirationDate, PasswordExpired, PasswordLastSet, LockedOut, PasswordNeverExpires, LastLogonDate
-        }
-
-        # Create an object to store information about this domain controller and add it to the array
-        $info = New-Object PSObject -Property @{
-            DomainController = $DC
-            Enabled = if ($user.Enabled) { "Yes" } else { "No" }
-            AccountExpirationDate = if ($user.AccountExpirationDate) { $user.AccountExpirationDate } else { "N/A" }
-            PasswordExpired = if ($user.PasswordExpired) { "Yes" } else { "No" }
-            PasswordAgeDays = (New-TimeSpan -Start $user.PasswordLastSet).Days
-            PasswordNeverExpires = if ($user.PasswordNeverExpires) { "Yes" } else { "No" }
-            LockedOut = if ($user.LockedOut) { "Yes" } else { "No" }
-        }
-        $DCInfo += $info
-
-        # Check if the account is enabled or disabled
-        if ($user.Enabled -eq $false) {
-            Write-Output "Account is disabled. Ask user for a user request form so the account can be enabled."
-            break
-        } else {
-            Write-Output "Account is enabled"
-        }
-
-        # Check if the account has an expiration date and if it has passed
-        if ($user.AccountExpirationDate -ne $null) {
-            if ($user.AccountExpirationDate -lt (Get-Date)) {
-                Write-Output "Account has expired. Ask user for a new contract so the account expiry date can be updated."
-                break
-            }
-        }
-
-        # Check if the password has expired
-        if ($user.PasswordExpired -eq $true) {
-            Write-Output "Password has expired"
-        }
-
-        # Calculate the password age in days
-        $passwordAge = (New-TimeSpan -Start $user.PasswordLastSet).Days
-        Write-Output "Password age: $passwordAge days"
-
-        # Check if the password age is over 30 days and reset it if necessary and if PasswordNeverExpires is not set to true
-        if ($passwordAge -gt 30) {
-            if ($user.PasswordNeverExpires -ne $true) {
-                Write-Output "Password age is over 30 days, resetting password to 'Password1'"
-                Set-ADAccountPassword -Identity $user.SamAccountName -NewPassword (ConvertTo-SecureString -AsPlainText "Password1" -Force)
-                Set-ADUser -Identity $user.SamAccountName -ChangePasswordAtLogon $true
-            } else {
-                Write-Output "Skipping password reset because PasswordNeverExpires is set to true"
-            }
-        }
-
-        # Check if the account is locked out and unlock it if necessary or display a message that it is not locked out
-        if ($user.LockedOut -eq $true) {
-            Write-Output "Unlocking user account on domain controller: $DC"
-            Unlock-ADAccount -Identity $user.SamAccountName
-        } else {
-            Write-Output "Account is not locked out on domain controller: $DC"
-        }
-    }
-
-    # Display a table with the user's name, all the properties checked, and the name of the admin that ran the script, as well as details about the date and time
-    Write-Output "`nSummary of information checked for user: $username"
-    $DCInfo | Format-Table -Property DomainController, Enabled, AccountExpirationDate, PasswordExpired, PasswordAgeDays, PasswordNeverExpires, LockedOut
-    Write-Output "Script run by: $($env:USERNAME) on $(Get-Date)"
-
-    # Prompt the user to reset the password for the specified user account
-    $resetPassword = Read-Host -Prompt 'Reset password for this user? (y/n)'
-    if ($resetPassword -eq 'y') {
-        # Prompt the user for the new password
-        $newPassword = Read-Host -Prompt 'Enter the new password' -AsSecureString
-
-        # Reset the password for the specified user account on each domain controller
         foreach ($DC in $DCs) {
-            Set-ADAccountPassword -Identity $username -Server $DC -NewPassword $newPassword
-            Set-ADUser -Identity $username -Server $DC -ChangePasswordAtLogon $true
+            Write-Output "`nChecking user on domain controller: $DC"
+
+            $domainControllerInfo = New-Object PSCustomObject
+            $domainControllerInfo | Add-Member -MemberType NoteProperty -Name DomainController -Value $DC
+            $domainControllerInfo | Add-Member -MemberType NoteProperty -Name Enabled -Value $userInfo.Enabled
+            $domainControllerInfo | Add-Member -MemberType NoteProperty -Name AccountExpirationDate -Value $userInfo.AccountExpirationDate
+            $domainControllerInfo | Add-Member -MemberType NoteProperty -Name PasswordExpired -Value $userInfo.PasswordExpired
+            $passwordAgeDays = ((Get-Date) - $userInfo.PasswordLastSet).Days
+            $domainControllerInfo | Add-Member -MemberType NoteProperty -Name PasswordAgeDays -Value $passwordAgeDays
+            $domainControllerInfo | Add-Member -MemberType NoteProperty -Name PasswordNeverExpires -Value $userInfo.PasswordNeverExpires
+            $domainControllerInfo | Add-Member -MemberType NoteProperty -Name LockedOut -Value $userInfo.LockedOut
+            $domainControllerInfo | Add-Member -MemberType NoteProperty -Name LastLogonDate -Value $userInfo.LastLogonDate
+
+            if ($userInfo.LockedOut) {
+                $lockedOutDCs += $DC
+            }
+
+            if ($passwordAgeDays -gt 30) {
+                $passwordExpired = $true
+            }
+
+            $DCInfo += $domainControllerInfo
         }
-        Write-Output "Password reset successfully"
+
+        Display-UserInfo -DCInfo $DCInfo -username $username
+
+        if ($passwordExpired) {
+            Write-Output "Password is expired. Resetting password to 'Password1' and requiring change at next logon."
+            Reset-UserPassword -username $username -DCs $DCs -newPassword 'Password1'
+        }
+
+        if ($lockedOutDCs.Count -gt 0) {
+            Write-Output "`nThe account is locked out on the following domain controllers:"
+            $lockedOutDCs | ForEach-Object { Write-Output $_ }
+        } else {
+            Write-Output "The account is not locked out on any domain controller."
+        }
+    } else {
+        Write-Warning "User not found on domain controller: $($DCs[0])"
     }
 
-    # Prompt the user to check another user or exit
     $checkAnother = Read-Host -Prompt 'Check another user? (y/n)'
 } while ($checkAnother -eq 'y')
