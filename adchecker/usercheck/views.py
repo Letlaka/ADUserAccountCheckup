@@ -14,11 +14,7 @@ def check_user(request):
             result = run_powershell_script(username)
     else:
         form = UserCheckForm()
-    context = {
-        "form": form, 
-        "result": result,
-        "title":"CheckUser"
-               }
+    context = {"form": form, "result": result, "title": "CheckUser"}
     return render(request, "usercheck/check_user.html", context)
 
 
