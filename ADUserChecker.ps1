@@ -85,6 +85,29 @@ function Reset-UserPassword {
     }
 }
 
+# Function to unlock user account
+function Unlock-UserAccount {
+    param (
+        [string]$username,
+        [array]$DCs
+    )
+    $unlockSuccessful = $false
+    foreach ($DC in $DCs) {
+        try {
+            Unlock-ADAccount -Identity $username -Server $DC
+            Write-Output "Account unlocked on domain controller: $DC"
+            $unlockSuccessful = $true
+            break  # Stop after successful unlock on any DC
+        } catch {
+            Write-Warning "Error unlocking account on domain controller: $DC"
+        }
+    }
+
+    if (!$unlockSuccessful) {
+        Write-Warning "Failed to unlock the account on all domain controllers"
+    }
+}
+
 # Main script
 $DCs = Get-DomainControllers
 
@@ -139,6 +162,10 @@ do {
         if ($lockedOutDCs.Count -gt 0) {
             Write-Output "`nThe account is locked out on the following domain controllers:"
             $lockedOutDCs | ForEach-Object { Write-Output $_ }
+            
+            # Automatically unlock the account
+            Write-Output "Automatically unlocking the account on all domain controllers where it is locked out."
+            Unlock-UserAccount -username $username -DCs $lockedOutDCs
         } else {
             Write-Output "The account is not locked out on any domain controller."
         }
