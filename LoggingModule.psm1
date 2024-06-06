@@ -1,6 +1,6 @@
 # LoggingModule.psm1
 
-function Log-Action {
+function Write-LogAction {
     param (
         [string]$message
     )
