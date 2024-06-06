@@ -1,6 +1,6 @@
 # MenuModule.psm1
 
-function Show-Menu {
+function Show-UserMenu {
     param (
         [string]$title
     )
