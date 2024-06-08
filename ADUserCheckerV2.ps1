@@ -44,87 +44,15 @@ do {
     switch ($choice) {
         "1" {
             $username = Read-Host -Prompt 'Enter the username to check'
-            if ([string]::IsNullOrWhiteSpace($username)) {
-                Write-Warning "Username cannot be empty."
-                continue
-            }
-            try {
-                $userInfo = Get-CachedUserInfo -username $username -servers $DCs -credential $credential
-                if ($userInfo) {
-                    $DCInfo = @()
-                    $passwordExpired = $false
-                    $lockedOutDCs = @()
-                    $needsPasswordReset = $false
-
-                    $jobs = @()
-
-                    foreach ($DC in $DCs) {
-                        $jobs += Start-Job -ScriptBlock {
-                            param ($DC, $userInfo)
-                            $domainControllerInfo = [PSCustomObject]@{
-                                DomainController      = $DC
-                                Enabled               = $userInfo.Enabled
-                                AccountExpirationDate = $userInfo.AccountExpirationDate
-                                PasswordExpired       = $userInfo.PasswordExpired
-                                PasswordAgeDays       = ((Get-Date) - $userInfo.PasswordLastSet).Days
-                                PasswordNeverExpires  = $userInfo.PasswordNeverExpires
-                                LockedOut             = $userInfo.LockedOut
-                                LastLogonDate         = $userInfo.LastLogonDate
-                            }
-
-                            if ($userInfo.LockedOut) {
-                                $domainControllerInfo
-                            }
-
-                            return $domainControllerInfo
-                        } -ArgumentList $DC, $userInfo
-                    }
-
-                    $DCInfo = $jobs | Receive-Job -Wait -AutoRemoveJob
-
-                    Display-UserInfo -DCInfo $DCInfo -username $username
-
-                    if ($passwordExpired) {
-                        Write-Output "Password is expired. Resetting password to 'Password1' and requiring change at next logon."
-                        $securePassword = ConvertTo-SecureString 'Password1' -AsPlainText -Force
-                        Set-UserPassword -username $username -DCs $DCs -newPassword $securePassword
-                    }
-
-                    if ($lockedOutDCs.Count -gt 0) {
-                        Write-Output "`nThe account is locked out on the following domain controllers:"
-                        $lockedOutDCs | ForEach-Object { Write-Output $_ }
-
-                        # Automatically unlock the account
-                        Write-Output "Automatically unlocking the account on all domain controllers where it is locked out."
-                        Unlock-UserAccount -username $username -DCs $lockedOutDCs
-                    } else {
-                        Write-Output "The account is not locked out on any domain controller."
-                    }
-                } else {
-                    Write-Warning "User not found on domain controller: $($DCs[0])"
-                }
-            } catch {
-                $errorMessage = $_.Exception.Message
-                Write-Warning "An error occurred while checking the user information: $errorMessage"
-                Write-Action "Error: $errorMessage"
-                Send-EmailNotification -subject "User Info Check Error" -body "An error occurred while checking the user information: $errorMessage"
-            }
+            Check-UserInformation -username $username
         }
         "2" {
             $username = Read-Host -Prompt 'Enter the username to reset password'
-            if ([string]::IsNullOrWhiteSpace($username)) {
-                Write-Warning "Username cannot be empty."
-                continue
-            }
             $newPassword = Read-Host -Prompt 'Enter the new password' -AsSecureString
             Set-UserPassword -username $username -DCs $DCs -newPassword $newPassword
         }
         "3" {
             $username = Read-Host -Prompt 'Enter the username to unlock account'
-            if ([string]::IsNullOrWhiteSpace($username)) {
-                Write-Warning "Username cannot be empty."
-                continue
-            }
             Unlock-UserAccount -username $username -DCs $DCs
         }
         "4" {
