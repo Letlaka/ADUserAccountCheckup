@@ -1,6 +1,5 @@
-# MenuModule.psm1
-
-function Show-UserMenu {
+# Function to display an interactive menu
+function Show-Menu {
     param (
         [string]$title
     )
@@ -18,3 +17,29 @@ function Show-UserMenu {
 
     return $choice
 }
+
+# Main script loop with menu
+do {
+    $choice = Show-Menu -title "User Account Management"
+    
+    switch ($choice) {
+        "1" {
+            # Call function to check user information
+        }
+        "2" {
+            # Call function to reset user password
+        }
+        "3" {
+            # Call function to unlock user account
+        }
+        "4" {
+            Generate-AccountStatusSummary
+        }
+        "5" {
+            break
+        }
+        default {
+            Write-Host "Invalid choice, please try again."
+        }
+    }
+} while ($true)

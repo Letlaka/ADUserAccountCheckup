@@ -1,6 +1,5 @@
-# ReportModule.psm1
-
-function New-AccountStatusSummary {
+# Function to get account status summary
+function Get-AccountStatusSummary {
     $users = Get-ADUser -Filter * -Property DisplayName, Enabled, LastLogonDate
     $report = @()
 
@@ -13,9 +12,9 @@ function New-AccountStatusSummary {
         $report += $userSummary
     }
 
-    $reportPath = Join-Path -Path $PSScriptRoot -ChildPath "UserAccountStatusSummary.csv"
-    $report | Export-Csv -Path $reportPath -NoTypeInformation
-    Write-Output "Account status summary generated: $reportPath"
-    Write-LogAction "Account status summary generated: $reportPath"
-    Send-EmailNotification -subject "Account Status Summary Generated" -body "Account status summary has been generated: $reportPath"
+    $report | Export-Csv -Path "UserAccountStatusSummary.csv" -NoTypeInformation
+    Write-Output "Account status summary generated: UserAccountStatusSummary.csv"
 }
+
+# Call the function
+Get-AccountStatusSummary

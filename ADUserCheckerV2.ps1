@@ -8,52 +8,79 @@ Import-Module -Name "$PSScriptRoot\UserManagementModule.psm1"
 Import-Module -Name "$PSScriptRoot\ReportModule.psm1"
 Import-Module -Name "$PSScriptRoot\MenuModule.psm1"
 
-# Main script loop with menu
+# Retrieve domain controllers list and check if the current machine is a domain controller
 $DCs = Get-DomainControllerList
 $isDC = Test-DomainController
+$credential = $null
 
 if (-not $isDC) {
-    $credential = Get-ADCredential -server ($DCs[0])
+    $credential = Get-ADCredential -Server ($DCs[0])
+}
+
+# Cache to store user information to avoid redundant AD calls
+$userInfoCache = @{}
+
+function Get-CachedUserInfo {
+    param (
+        [string]$username,
+        [array]$servers,
+        [PSCredential]$credential = $null
+    )
+
+    if ($userInfoCache.ContainsKey($username)) {
+        return $userInfoCache[$username]
+    }
+
+    $userInfo = Get-UserInformation -username $username -servers $servers -credential $credential
+    if ($userInfo) {
+        $userInfoCache[$username] = $userInfo
+    }
+    return $userInfo
 }
 
 do {
-    $choice = Show-UserMenu -title "User Account Management"
+    $choice = Show-Menu -title "User Account Management"
 
     switch ($choice) {
         "1" {
             $username = Read-Host -Prompt 'Enter the username to check'
+            if ([string]::IsNullOrWhiteSpace($username)) {
+                Write-Warning "Username cannot be empty."
+                continue
+            }
             try {
-                $userInfo = Get-UserInformation -username $username -servers $DCs -credential $credential
+                $userInfo = Get-CachedUserInfo -username $username -servers $DCs -credential $credential
                 if ($userInfo) {
                     $DCInfo = @()
                     $passwordExpired = $false
                     $lockedOutDCs = @()
                     $needsPasswordReset = $false
 
+                    $jobs = @()
+
                     foreach ($DC in $DCs) {
-                        Write-Output "`nChecking user on domain controller: $DC"
+                        $jobs += Start-Job -ScriptBlock {
+                            param ($DC, $userInfo)
+                            $domainControllerInfo = [PSCustomObject]@{
+                                DomainController      = $DC
+                                Enabled               = $userInfo.Enabled
+                                AccountExpirationDate = $userInfo.AccountExpirationDate
+                                PasswordExpired       = $userInfo.PasswordExpired
+                                PasswordAgeDays       = ((Get-Date) - $userInfo.PasswordLastSet).Days
+                                PasswordNeverExpires  = $userInfo.PasswordNeverExpires
+                                LockedOut             = $userInfo.LockedOut
+                                LastLogonDate         = $userInfo.LastLogonDate
+                            }
 
-                        $domainControllerInfo = New-Object PSCustomObject
-                        $domainControllerInfo | Add-Member -MemberType NoteProperty -Name DomainController -Value $DC
-                        $domainControllerInfo | Add-Member -MemberType NoteProperty -Name Enabled -Value $userInfo.Enabled
-                        $domainControllerInfo | Add-Member -MemberType NoteProperty -Name AccountExpirationDate -Value $userInfo.AccountExpirationDate
-                        $domainControllerInfo | Add-Member -MemberType NoteProperty -Name PasswordExpired -Value $userInfo.PasswordExpired
-                        $passwordAgeDays = ((Get-Date) - $userInfo.PasswordLastSet).Days
-                        $domainControllerInfo | Add-Member -MemberType NoteProperty -Name PasswordAgeDays -Value $passwordAgeDays
-                        $domainControllerInfo | Add-Member -MemberType NoteProperty -Name PasswordNeverExpires -Value $userInfo.PasswordNeverExpires
-                        $domainControllerInfo | Add-Member -MemberType NoteProperty -Name LockedOut -Value $userInfo.LockedOut
-                        $domainControllerInfo | Add-Member -MemberType NoteProperty -Name LastLogonDate -Value $userInfo.LastLogonDate
+                            if ($userInfo.LockedOut) {
+                                $domainControllerInfo
+                            }
 
-                        if ($userInfo.LockedOut) {
-                            $lockedOutDCs += $DC
-                        }
-
-                        if ($passwordAgeDays -gt 30) {
-                            $passwordExpired = $true
-                        }
-
-                        $DCInfo += $domainControllerInfo
+                            return $domainControllerInfo
+                        } -ArgumentList $DC, $userInfo
                     }
+
+                    $DCInfo = $jobs | Receive-Job -Wait -AutoRemoveJob
 
                     Display-UserInfo -DCInfo $DCInfo -username $username
 
@@ -79,21 +106,29 @@ do {
             } catch {
                 $errorMessage = $_.Exception.Message
                 Write-Warning "An error occurred while checking the user information: $errorMessage"
-                Write-LogAction "Error: $errorMessage"
+                Write-Action "Error: $errorMessage"
                 Send-EmailNotification -subject "User Info Check Error" -body "An error occurred while checking the user information: $errorMessage"
             }
         }
         "2" {
             $username = Read-Host -Prompt 'Enter the username to reset password'
+            if ([string]::IsNullOrWhiteSpace($username)) {
+                Write-Warning "Username cannot be empty."
+                continue
+            }
             $newPassword = Read-Host -Prompt 'Enter the new password' -AsSecureString
             Set-UserPassword -username $username -DCs $DCs -newPassword $newPassword
         }
         "3" {
             $username = Read-Host -Prompt 'Enter the username to unlock account'
+            if ([string]::IsNullOrWhiteSpace($username)) {
+                Write-Warning "Username cannot be empty."
+                continue
+            }
             Unlock-UserAccount -username $username -DCs $DCs
         }
         "4" {
-            New-AccountStatusSummary
+            Get-AccountStatusSummary
         }
         "5" {
             exit

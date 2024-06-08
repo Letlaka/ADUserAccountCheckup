@@ -1,6 +1,5 @@
-# LoggingModule.psm1
-
-function Write-LogAction {
+# Function to write actions
+function Write-Action {
     param (
         [string]$message
     )
@@ -8,3 +7,7 @@ function Write-LogAction {
     $timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
     Add-Content -Path $logFilePath -Value "$timestamp - $message"
 }
+
+# Example usage in existing functions
+$DC = "domaincontroller.example.com"
+Write-Action "Password reset successfully on domain controller: $DC"

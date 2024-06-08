@@ -1,106 +1,82 @@
 # ADModule.psm1
 
 function Test-DomainController {
+    # Get Win32_ComputerSystem information
     $computer = Get-WmiObject -Class Win32_ComputerSystem
-    return $computer.DomainRole -eq 4 -or $computer.DomainRole -eq 5
+  
+    # Check if DomainRole is either 4 (Domain Controller) or 5 (Primary Domain Controller)
+    $isDomainController = $computer.DomainRole -in @(4, 5)
+  
+    # Return the result
+    return $isDomainController
 }
-
 function Get-DomainControllerList {
+    # Define the path to the domain controller list file
     $DCListPath = Join-Path -Path $PSScriptRoot -ChildPath "servers.txt"
-    if (Test-Path $DCListPath) {
-        return Get-Content $DCListPath
+  
+    # Check if the file exists
+    if (Test-Path -Path $DCListPath) {
+      # Read the domain controller list from the file
+      return Get-Content -Path $DCListPath
     } else {
-        Write-Warning "Domain controller list file not found: $DCListPath"
-        return Get-ADDomainController -Filter {Enabled -eq $true} | Select-Object -ExpandProperty HostName
+      # Log a warning about missing file
+      Write-Warning "Domain controller list file not found: $DCListPath"
+  
+      # Get domain controllers from Active Directory and select hostnames
+      return Get-ADDomainController -Filter { Enabled -eq $true } | Select-Object -ExpandProperty HostName
     }
-}
-
-function Get-ADCredential {
+  }
+  
+  function Get-ADCredential {
     param (
-        [string]$server
+      [Parameter(Mandatory=$true)]
+      [string] $Server
     )
+  
     do {
-        $credential = Get-Credential -Message "Enter credentials"
-        try {
-            Get-ADUser -Filter * -Server $server -Credential $credential -ErrorAction Stop | Out-Null
-            return $credential
-        } catch {
-            Write-Warning "Invalid credentials, please try again"
-        }
+      # Prompt for credentials
+      $credential = Get-Credential -Message "Enter credentials"
+  
+      try {
+        # Validate credentials by attempting to get any user
+        Get-ADUser -Filter * -Server $Server -Credential $credential -ErrorAction Stop | Out-Null
+        return $credential
+      } catch {
+        # Log a warning about invalid credentials
+        Write-Warning "Invalid credentials, please try again"
+      }
     } while ($true)
-}
-
-function Get-UserInformation {
+  }
+  
+  function Get-UserInformation {
     param (
-        [string]$username,
-        [array]$servers,
-        [pscredential]$credential = $null
+      [Parameter(Mandatory=$true)]
+      [string] $Username,
+      [Parameter(Mandatory=$true)]
+      [array] $Servers,
+      [Parameter(Mandatory=$false)]
+      [PSCredential] $Credential = $null
     )
+  
     $properties = @('AccountExpirationDate', 'PasswordExpired', 'PasswordLastSet', 'LockedOut', 'PasswordNeverExpires', 'LastLogonDate', 'Enabled')
-    foreach ($server in $servers) {
-        try {
-            if ($credential) {
-                $userInfo = Get-ADUser -Identity $username -Server $server -Credential $credential -Properties $properties -ErrorAction Stop
-            } else {
-                $userInfo = Get-ADUser -Identity $username -Server $server -Properties $properties -ErrorAction Stop
-            }
-            return $userInfo
-        } catch {
-            Write-Warning "User not found on domain controller: $server"
+  
+    # Loop through each server
+    foreach ($server in $Servers) {
+      try {
+        # Get user information with specified properties
+        if ($Credential) {
+          $userInfo = Get-ADUser -Identity $Username -Server $server -Credential $Credential -Properties $properties -ErrorAction Stop
+        } else {
+          $userInfo = Get-ADUser -Identity $Username -Server $server -Properties $properties -ErrorAction Stop
         }
+        return $userInfo
+      } catch {
+        # Log a warning about user not found on specific server
+        Write-Warning "User not found on domain controller: $server"
+      }
     }
+  
+    # Return null if user not found on any server
     return $null
-}
-# ADModule.psm1
-
-function Test-DomainController {
-    $computer = Get-WmiObject -Class Win32_ComputerSystem
-    return $computer.DomainRole -eq 4 -or $computer.DomainRole -eq 5
-}
-
-function Get-DomainControllerList {
-    $DCListPath = Join-Path -Path $PSScriptRoot -ChildPath "servers.txt"
-    if (Test-Path $DCListPath) {
-        return Get-Content $DCListPath
-    } else {
-        Write-Warning "Domain controller list file not found: $DCListPath"
-        return Get-ADDomainController -Filter {Enabled -eq $true} | Select-Object -ExpandProperty HostName
-    }
-}
-
-function Get-ADCredential {
-    param (
-        [string]$server
-    )
-    do {
-        $credential = Get-Credential -Message "Enter credentials"
-        try {
-            Get-ADUser -Filter * -Server $server -Credential $credential -ErrorAction Stop | Out-Null
-            return $credential
-        } catch {
-            Write-Warning "Invalid credentials, please try again"
-        }
-    } while ($true)
-}
-
-function Get-UserInformation {
-    param (
-        [string]$username,
-        [array]$servers,
-        [pscredential]$credential = $null
-    )
-    $properties = @('AccountExpirationDate', 'PasswordExpired', 'PasswordLastSet', 'LockedOut', 'PasswordNeverExpires', 'LastLogonDate', 'Enabled')
-    foreach ($server in $servers) {
-        try {
-            if ($credential) {
-                $userInfo = Get-ADUser -Identity $username -Server $server -Credential $credential -Properties $properties -ErrorAction Stop
-            } else {
-                $userInfo = Get-ADUser -Identity $username -Server $server -Properties $properties -ErrorAction Stop
-            }
-            return $userInfo
-        } catch {
-            Write-Warning "User not found on domain controller: $server"
-        }
-    }
-    return $null
-}
+  }
+  
